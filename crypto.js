@@ -1,161 +1,401 @@
-// AES 加密解密相关函数
-const AES_KEY = 'UKu52ePUBwetZ9wNX88o54dnfKRu0T1l';
-const FIXED_HEADER = new Uint8Array([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-]);
-const TAIL_BYTE = 0x0B;
+// Base64 编码解码
+var BASE64_ARRAY = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=".split("").map(c => c.charCodeAt(0))
+var BASE64_ENCODE_TABLE = new Map(BASE64_ARRAY.map((ord, i) => [i, ord]))
+var BASE64_DECODE_TABLE = new Map(BASE64_ARRAY.map((ord, i) => [ord, i]))
 
-// Base64 解码
-function base64ToBytes(base64) {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+function base64Encode(buffer) {
+    buffer = new Uint8Array(buffer).slice()
+    var output = new Uint8Array(Math.ceil(Math.ceil(buffer.length * 4 / 3) / 4) * 4)
+    let continuous = Math.floor(buffer.length / 3) * 3
+
+    for (let i = 0; i < continuous; i += 3) {
+        let k = 4 * i / 3
+        output[k] = BASE64_ENCODE_TABLE.get(buffer[i] >> 2)
+        output[k + 1] = BASE64_ENCODE_TABLE.get((buffer[i] & 0x03) << 4 | buffer[i + 1] >> 4)
+        output[k + 2] = BASE64_ENCODE_TABLE.get((buffer[i + 1] & 0x0F) << 2 | buffer[i + 2] >> 6)
+        output[k + 3] = BASE64_ENCODE_TABLE.get(buffer[i + 2] & 0x3F)
     }
-    return bytes;
-}
 
-// Base64 编码
-function bytesToBase64(bytes) {
-    let binaryString = '';
-    for (let i = 0; i < bytes.length; i++) {
-        binaryString += String.fromCharCode(bytes[i]);
+    if (buffer[continuous] != undefined) {
+        let k = 4 * continuous / 3
+        output[k] = BASE64_ENCODE_TABLE.get(buffer[continuous] >> 2)
+        if (buffer[continuous + 1] == undefined) {
+            output[k + 1] = BASE64_ENCODE_TABLE.get((buffer[continuous] & 0x03) << 4)
+            output[k + 2] = BASE64_ENCODE_TABLE.get(64)
+        } else {
+            output[k + 1] = BASE64_ENCODE_TABLE.get((buffer[continuous] & 0x03) << 4 | buffer[continuous + 1] >> 4)
+            output[k + 2] = BASE64_ENCODE_TABLE.get((buffer[continuous + 1] & 0x0F) << 2)
+        }
+        output[k + 3] = BASE64_ENCODE_TABLE.get(64)
     }
-    return btoa(binaryString);
+
+    return output
 }
 
-// PKCS7 移除填充
-function removePadding(data) {
-    const paddingLength = data[data.length - 1];
-    return data.slice(0, data.length - paddingLength);
-}
-
-// PKCS7 添加填充
-function addPadding(data) {
-    const blockSize = 16;
-    const paddingLength = blockSize - (data.length % blockSize);
-    const padded = new Uint8Array(data.length + paddingLength);
-    padded.set(data);
-    for (let i = data.length; i < padded.length; i++) {
-        padded[i] = paddingLength;
+function base64Decode(buffer) {
+    buffer = new Uint8Array(buffer).slice()
+    buffer = buffer.map(v => BASE64_DECODE_TABLE.get(v))
+    let p = buffer.indexOf(64);
+    buffer = buffer.subarray(0, p != -1 ? p : buffer.length)
+    var output = new Uint8Array(3 * buffer.length / 4)
+    let continuous = Math.floor(buffer.length / 4) * 4
+    for (let i = 0; i < continuous; i += 4) {
+        let k = 3 * i / 4
+        output[k] = buffer[i] << 2 | buffer[i + 1] >> 4
+        output[k + 1] = (buffer[i + 1] & 0x0F) << 4 | buffer[i + 2] >> 2
+        output[k + 2] = (buffer[i + 2] & 0x03) << 6 | buffer[i + 3]
     }
-    return padded;
+    if (buffer[continuous] != undefined) {
+        let k = 3 * continuous / 4
+        output[k] = buffer[continuous] << 2 | buffer[continuous + 1] >> 4
+        if (buffer[continuous + 2] != undefined) {
+            output[k + 1] = (buffer[continuous + 1] & 0x0F) << 4 | buffer[continuous + 2] >> 2
+        }
+    }
+    return output
 }
 
-// 解密函数
-async function decryptSave(fileData) {
-    try {
-        // 移除头部 22 字节
-        let offset = 22;
+// AES-256 ECB 模式实现
+class AES_ECB {
+    constructor(key) {
+        this.key = key;
+        this.rounds = 14; // AES-256 uses 14 rounds
+        this.expandedKey = this.expandKey(key);
+    }
 
-        // 读取长度前缀（可变长度）
-        let dataLength = 0;
-        let shift = 0;
-        while (offset < fileData.length) {
-            const byte = fileData[offset++];
-            dataLength |= (byte & 0x7F) << shift;
-            if ((byte & 0x80) === 0) break;
-            shift += 7;
+    expandKey(key) {
+        const expanded = new Uint8Array(240);
+        expanded.set(key);
+
+        const rcon = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36];
+        const sbox = this.getSBox();
+
+        for (let i = 8; i < 60; i++) {
+            let temp = [
+                expanded[(i - 1) * 4],
+                expanded[(i - 1) * 4 + 1],
+                expanded[(i - 1) * 4 + 2],
+                expanded[(i - 1) * 4 + 3]
+            ];
+
+            if (i % 8 === 0) {
+                temp = [
+                    sbox[temp[1]] ^ rcon[i / 8 - 1],
+                    sbox[temp[2]],
+                    sbox[temp[3]],
+                    sbox[temp[0]]
+                ];
+            } else if (i % 8 === 4) {
+                temp = temp.map(b => sbox[b]);
+            }
+
+            for (let j = 0; j < 4; j++) {
+                expanded[i * 4 + j] = expanded[(i - 8) * 4 + j] ^ temp[j];
+            }
         }
 
-        // 移除末尾 1 字节
-        const endPos = fileData.length - 1;
+        return expanded;
+    }
 
-        // 提取 Base64 数据
-        const base64Data = new TextDecoder().decode(fileData.slice(offset, endPos));
+    getSBox() {
+        return new Uint8Array([
+            0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+            0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+            0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+            0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+            0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+            0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+            0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+            0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+            0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+            0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+            0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+            0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+            0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+            0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+            0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+            0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
+        ]);
+    }
 
-        // Base64 解码
-        const encryptedData = base64ToBytes(base64Data);
+    getInvSBox() {
+        return new Uint8Array([
+            0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
+            0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
+            0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
+            0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49, 0x6d, 0x8b, 0xd1, 0x25,
+            0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c, 0xcc, 0x5d, 0x65, 0xb6, 0x92,
+            0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84,
+            0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05, 0xb8, 0xb3, 0x45, 0x06,
+            0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02, 0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b,
+            0x3a, 0x91, 0x11, 0x41, 0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73,
+            0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e,
+            0x47, 0xf1, 0x1a, 0x71, 0x1d, 0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b,
+            0xfc, 0x56, 0x3e, 0x4b, 0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4,
+            0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f,
+            0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
+            0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+            0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d
+        ]);
+    }
 
-        // AES 解密
-        const key = await crypto.subtle.importKey(
-            'raw',
-            new TextEncoder().encode(AES_KEY),
-            { name: 'AES-CBC' },
-            false,
-            ['decrypt']
-        );
+    encryptBlock(block) {
+        const state = new Uint8Array(block);
+        const sbox = this.getSBox();
 
-        // 使用零 IV 进行 ECB 模式模拟
-        const iv = new Uint8Array(16);
-        const decrypted = await crypto.subtle.decrypt(
-            { name: 'AES-CBC', iv: iv },
-            key,
-            encryptedData
-        );
+        // Initial round
+        this.addRoundKey(state, 0);
 
-        // 移除填充
-        const unpaddedData = removePadding(new Uint8Array(decrypted));
+        // Main rounds
+        for (let round = 1; round < this.rounds; round++) {
+            this.subBytes(state, sbox);
+            this.shiftRows(state);
+            this.mixColumns(state);
+            this.addRoundKey(state, round);
+        }
 
-        // 转换为 JSON
-        const jsonString = new TextDecoder().decode(unpaddedData);
-        return JSON.parse(jsonString);
-    } catch (error) {
-        console.error('解密失败:', error);
-        throw new Error('解密失败，请确保文件格式正确');
+        // Final round
+        this.subBytes(state, sbox);
+        this.shiftRows(state);
+        this.addRoundKey(state, this.rounds);
+
+        return state;
+    }
+
+    decryptBlock(block) {
+        const state = new Uint8Array(block);
+        const invSbox = this.getInvSBox();
+
+        // Initial round
+        this.addRoundKey(state, this.rounds);
+
+        // Main rounds
+        for (let round = this.rounds - 1; round > 0; round--) {
+            this.invShiftRows(state);
+            this.subBytes(state, invSbox);
+            this.addRoundKey(state, round);
+            this.invMixColumns(state);
+        }
+
+        // Final round
+        this.invShiftRows(state);
+        this.subBytes(state, invSbox);
+        this.addRoundKey(state, 0);
+
+        return state;
+    }
+
+    addRoundKey(state, round) {
+        for (let i = 0; i < 16; i++) {
+            state[i] ^= this.expandedKey[round * 16 + i];
+        }
+    }
+
+    subBytes(state, sbox) {
+        for (let i = 0; i < 16; i++) {
+            state[i] = sbox[state[i]];
+        }
+    }
+
+    shiftRows(state) {
+        let temp = state[1];
+        state[1] = state[5];
+        state[5] = state[9];
+        state[9] = state[13];
+        state[13] = temp;
+
+        temp = state[2];
+        state[2] = state[10];
+        state[10] = temp;
+        temp = state[6];
+        state[6] = state[14];
+        state[14] = temp;
+
+        temp = state[15];
+        state[15] = state[11];
+        state[11] = state[7];
+        state[7] = state[3];
+        state[3] = temp;
+    }
+
+    invShiftRows(state) {
+        let temp = state[13];
+        state[13] = state[9];
+        state[9] = state[5];
+        state[5] = state[1];
+        state[1] = temp;
+
+        temp = state[2];
+        state[2] = state[10];
+        state[10] = temp;
+        temp = state[6];
+        state[6] = state[14];
+        state[14] = temp;
+
+        temp = state[3];
+        state[3] = state[7];
+        state[7] = state[11];
+        state[11] = state[15];
+        state[15] = temp;
+    }
+
+    mixColumns(state) {
+        for (let i = 0; i < 4; i++) {
+            const s0 = state[i * 4];
+            const s1 = state[i * 4 + 1];
+            const s2 = state[i * 4 + 2];
+            const s3 = state[i * 4 + 3];
+
+            state[i * 4] = this.gfMul(s0, 2) ^ this.gfMul(s1, 3) ^ s2 ^ s3;
+            state[i * 4 + 1] = s0 ^ this.gfMul(s1, 2) ^ this.gfMul(s2, 3) ^ s3;
+            state[i * 4 + 2] = s0 ^ s1 ^ this.gfMul(s2, 2) ^ this.gfMul(s3, 3);
+            state[i * 4 + 3] = this.gfMul(s0, 3) ^ s1 ^ s2 ^ this.gfMul(s3, 2);
+        }
+    }
+
+    invMixColumns(state) {
+        for (let i = 0; i < 4; i++) {
+            const s0 = state[i * 4];
+            const s1 = state[i * 4 + 1];
+            const s2 = state[i * 4 + 2];
+            const s3 = state[i * 4 + 3];
+
+            state[i * 4] = this.gfMul(s0, 14) ^ this.gfMul(s1, 11) ^ this.gfMul(s2, 13) ^ this.gfMul(s3, 9);
+            state[i * 4 + 1] = this.gfMul(s0, 9) ^ this.gfMul(s1, 14) ^ this.gfMul(s2, 11) ^ this.gfMul(s3, 13);
+            state[i * 4 + 2] = this.gfMul(s0, 13) ^ this.gfMul(s1, 9) ^ this.gfMul(s2, 14) ^ this.gfMul(s3, 11);
+            state[i * 4 + 3] = this.gfMul(s0, 11) ^ this.gfMul(s1, 13) ^ this.gfMul(s2, 9) ^ this.gfMul(s3, 14);
+        }
+    }
+
+    gfMul(a, b) {
+        let p = 0;
+        for (let i = 0; i < 8; i++) {
+            if (b & 1) p ^= a;
+            const hi_bit_set = a & 0x80;
+            a <<= 1;
+            if (hi_bit_set) a ^= 0x1b;
+            b >>= 1;
+        }
+        return p & 0xff;
+    }
+
+    encrypt(data) {
+        const result = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i += 16) {
+            const block = data.slice(i, i + 16);
+            const encrypted = this.encryptBlock(block);
+            result.set(encrypted, i);
+        }
+        return result;
+    }
+
+    decrypt(data) {
+        const result = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i += 16) {
+            const block = data.slice(i, i + 16);
+            const decrypted = this.decryptBlock(block);
+            result.set(decrypted, i);
+        }
+        return result;
     }
 }
 
-// 加密函数
+// 主要功能函数
+const cSharpHeader = [0, 1, 0, 0, 0, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0, 6, 1, 0, 0, 0]
+const aesKey = new TextEncoder().encode('UKu52ePUBwetZ9wNX88o54dnfKRu0T1l')
+const ecb = new AES_ECB(aesKey)
+
+function StringToBytes(string) {
+    return new TextEncoder().encode(string)
+}
+
+function BytesToString(bytes) {
+    return new TextDecoder().decode(bytes)
+}
+
+function AESDecrypt(bytes) {
+    let data = ecb.decrypt(bytes)
+    data = data.subarray(0, -data[data.length - 1])
+    return data
+}
+
+function AESEncrypt(bytes) {
+    let padValue = 16 - bytes.length % 16
+    var padded = new Uint8Array(bytes.length + padValue)
+    padded.fill(padValue)
+    padded.set(bytes)
+    return ecb.encrypt(padded)
+}
+
+function GenerateLengthPrefixedString(length) {
+    var length = Math.min(0x7FFFFFFF, length)
+    var bytes = []
+    for (let i = 0; i < 4; i++) {
+        if (length >> 7 != 0) {
+            bytes.push(length & 0x7F | 0x80)
+            length >>= 7
+        } else {
+            bytes.push(length & 0x7F)
+            length >>= 7
+            break
+        }
+    }
+    if (length != 0) {
+        bytes.push(length)
+    }
+
+    return bytes
+}
+
+function AddHeader(bytes) {
+    var lengthData = GenerateLengthPrefixedString(bytes.length)
+    var newBytes = new Uint8Array(bytes.length + cSharpHeader.length + lengthData.length + 1)
+    newBytes.set(cSharpHeader)
+    newBytes.subarray(cSharpHeader.length).set(lengthData)
+    newBytes.subarray(cSharpHeader.length + lengthData.length).set(bytes)
+    newBytes.subarray(cSharpHeader.length + lengthData.length + bytes.length).set([11])
+    return newBytes
+}
+
+function RemoveHeader(bytes) {
+    bytes = bytes.subarray(cSharpHeader.length, bytes.length - 1)
+
+    let lengthCount = 0
+    for (let i = 0; i < 5; i++) {
+        lengthCount++
+        if ((bytes[i] & 0x80) == 0) {
+            break
+        }
+    }
+    bytes = bytes.subarray(lengthCount)
+
+    return bytes
+}
+
+// 导出的主要函数
+async function decryptSave(bytes) {
+    try {
+        bytes = bytes.slice()
+        bytes = RemoveHeader(bytes)
+        bytes = base64Decode(bytes)
+        bytes = AESDecrypt(bytes)
+        const jsonString = BytesToString(bytes)
+        return JSON.parse(jsonString)
+    } catch (error) {
+        console.error('解密失败:', error)
+        throw new Error('解密失败，请确保文件格式正确')
+    }
+}
+
 async function encryptSave(jsonData) {
     try {
-        // JSON 转字符串
-        const jsonString = JSON.stringify(jsonData);
-        const data = new TextEncoder().encode(jsonString);
-
-        // 添加填充
-        const paddedData = addPadding(data);
-
-        // AES 加密
-        const key = await crypto.subtle.importKey(
-            'raw',
-            new TextEncoder().encode(AES_KEY),
-            { name: 'AES-CBC' },
-            false,
-            ['encrypt']
-        );
-
-        const iv = new Uint8Array(16);
-        const encrypted = await crypto.subtle.encrypt(
-            { name: 'AES-CBC', iv: iv },
-            key,
-            paddedData
-        );
-
-        // Base64 编码
-        const base64Data = bytesToBase64(new Uint8Array(encrypted));
-        const base64Bytes = new TextEncoder().encode(base64Data);
-
-        // 生成长度前缀
-        let dataLength = base64Bytes.length;
-        const lengthPrefix = [];
-        while (dataLength > 0x7F) {
-            lengthPrefix.push((dataLength & 0x7F) | 0x80);
-            dataLength >>= 7;
-        }
-        lengthPrefix.push(dataLength & 0x7F);
-
-        // 组装最终数据
-        const totalLength = FIXED_HEADER.length + lengthPrefix.length + base64Bytes.length + 1;
-        const result = new Uint8Array(totalLength);
-
-        let offset = 0;
-        result.set(FIXED_HEADER, offset);
-        offset += FIXED_HEADER.length;
-
-        result.set(new Uint8Array(lengthPrefix), offset);
-        offset += lengthPrefix.length;
-
-        result.set(base64Bytes, offset);
-        offset += base64Bytes.length;
-
-        result[offset] = TAIL_BYTE;
-
-        return result;
+        const jsonString = JSON.stringify(jsonData)
+        var bytes = StringToBytes(jsonString)
+        bytes = AESEncrypt(bytes)
+        bytes = base64Encode(bytes)
+        return AddHeader(bytes)
     } catch (error) {
-        console.error('加密失败:', error);
-        throw new Error('加密失败');
+        console.error('加密失败:', error)
+        throw new Error('加密失败')
     }
 }
