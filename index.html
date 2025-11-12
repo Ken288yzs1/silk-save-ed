@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Silksong 存档编辑器</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🕷️ Silksong 存档编辑器</h1>
+
+        <div class="upload-section">
+            <input type="file" id="fileInput" accept=".dat">
+            <button id="parseBtn" class="btn">解析存档</button>
+        </div>
+
+        <div id="content" style="display: none;">
+            <div class="section">
+                <h2>装备护符</h2>
+                <div id="charmsList"></div>
+                <div class="add-charm">
+                    <input type="text" id="newCharmName" placeholder="输入护符名称">
+                    <button id="addCharmBtn" class="btn btn-small">添加护符</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>猎人日志</h2>
+                <div id="journalList"></div>
+            </div>
+
+            <div class="download-section">
+                <button id="downloadBtn" class="btn btn-primary">下载修改后的存档</button>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <script src="crypto.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
