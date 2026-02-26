@@ -1,6 +1,7 @@
 let saveData = null;
 let fileName = 'user1.dat';
 let selectedCharmsToAdd = new Set();
+let currentCrestIndex = 0; // 当前选中的战斗风格索引
 
 document.getElementById('fileInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -23,6 +24,13 @@ document.getElementById('parseBtn').addEventListener('click', async () => {
         const fileData = new Uint8Array(arrayBuffer);
 
         saveData = await decryptSave(fileData);
+        console.log('解析后的存档数据:', JSON.parse(JSON.stringify(saveData)));
+
+        // 默认选中当前激活的战斗风格
+        const currentCrestID = saveData.playerData.CurrentCrestID;
+        const crestList = saveData.playerData.ToolEquips.savedData;
+        currentCrestIndex = crestList.findIndex(c => c.Name === currentCrestID);
+        if (currentCrestIndex === -1) currentCrestIndex = 0;
 
         displayContent();
         document.getElementById('content').style.display = 'block';
@@ -33,32 +41,69 @@ document.getElementById('parseBtn').addEventListener('click', async () => {
 });
 
 function displayContent() {
+    displayCrestTabs();
     displayEquippedCharms();
     displayAvailableCharms();
     displayJournal();
+}
+
+function displayCrestTabs() {
+    const tabsContainer = document.getElementById('crestTabs');
+    const infoContainer = document.getElementById('crestInfo');
+    tabsContainer.innerHTML = '';
+
+    const crestList = saveData.playerData.ToolEquips.savedData;
+    const currentCrestID = saveData.playerData.CurrentCrestID;
+
+    crestList.forEach((crest, index) => {
+        const tab = document.createElement('button');
+        tab.className = 'crest-tab' + (index === currentCrestIndex ? ' active' : '');
+        const isActive = crest.Name === currentCrestID;
+        tab.innerHTML = `${crest.Name}${isActive ? ' ⚔️' : ''}`;
+        tab.title = isActive ? '当前激活的战斗风格' : '点击切换编辑此风格';
+        tab.addEventListener('click', () => {
+            currentCrestIndex = index;
+            selectedCharmsToAdd.clear();
+            displayCrestTabs();
+            displayEquippedCharms();
+            displayAvailableCharms();
+        });
+        tabsContainer.appendChild(tab);
+    });
+
+    const currentCrest = crestList[currentCrestIndex];
+    infoContainer.innerHTML = `
+        <span>正在编辑: <strong>${currentCrest.Name}</strong></span>
+        <span class="crest-status">${currentCrest.Data.IsUnlocked ? '✅ 已解锁' : '🔒 未解锁'}</span>
+    `;
+
+    document.getElementById('currentCrestLabel').textContent = `— ${currentCrest.Name}`;
 }
 
 function displayEquippedCharms() {
     const equippedList = document.getElementById('equippedCharmsList');
     equippedList.innerHTML = '';
 
-    const toolEquips = saveData.playerData.ToolEquips.savedData[0].Data.Slots;
+    const toolEquips = saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots;
+    let hasEquipped = false;
 
     toolEquips.forEach((slot, index) => {
-        if (slot.EquippedTool) {
+        if (slot.EquippedTool && slot.EquippedTool !== '') {
+            hasEquipped = true;
             const charmDiv = document.createElement('div');
             charmDiv.className = 'charm-item';
             charmDiv.innerHTML = `
                 <input type="checkbox" ${slot.IsUnlocked ? 'checked' : ''}
                        onchange="toggleCharmSlot(${index}, this.checked)">
                 <span class="charm-name">${slot.EquippedTool}</span>
+                <span class="slot-index">槽位 ${index + 1}</span>
                 <button class="remove-btn" onclick="unequipCharm(${index})">卸下</button>
             `;
             equippedList.appendChild(charmDiv);
         }
     });
 
-    if (toolEquips.filter(s => s.EquippedTool).length === 0) {
+    if (!hasEquipped) {
         equippedList.innerHTML = '<p style="color: #ffcccc; text-align: center;">暂无装备护符</p>';
     }
 }
@@ -67,15 +112,13 @@ function displayAvailableCharms() {
     const availableList = document.getElementById('availableCharmsList');
     availableList.innerHTML = '';
 
-    // 获取所有已拥有的护符
     const allTools = saveData.playerData.Tools.savedData;
 
-    // 获取已装备的护符名称
-    const equippedCharms = saveData.playerData.ToolEquips.savedData[0].Data.Slots
-        .filter(slot => slot.EquippedTool)
+    // 获取当前风格已装备的护符名称
+    const equippedCharms = saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots
+        .filter(slot => slot.EquippedTool && slot.EquippedTool !== '')
         .map(slot => slot.EquippedTool);
 
-    // 筛选出未装备的护符
     const availableCharms = allTools.filter(tool =>
         tool.Data.IsUnlocked && !equippedCharms.includes(tool.Name)
     );
@@ -88,10 +131,11 @@ function displayAvailableCharms() {
     availableCharms.forEach(tool => {
         const charmDiv = document.createElement('div');
         charmDiv.className = 'available-charm-item';
+        const safeId = CSS.escape(tool.Name);
         charmDiv.innerHTML = `
-            <input type="checkbox" id="charm_${tool.Name}"
-                   onchange="toggleCharmSelection('${tool.Name}', this.checked)">
-            <label for="charm_${tool.Name}" class="charm-name">${tool.Name}</label>
+            <input type="checkbox" id="charm_${safeId}"
+                   onchange="toggleCharmSelection('${tool.Name.replace(/'/g, "\\'")}', this.checked)">
+            <label for="charm_${safeId}" class="charm-name">${tool.Name}</label>
         `;
         availableList.appendChild(charmDiv);
     });
@@ -111,53 +155,29 @@ document.getElementById('addSelectedCharmsBtn').addEventListener('click', () => 
         return;
     }
 
-    const slots = saveData.playerData.ToolEquips.savedData[0].Data.Slots;
+    const slots = saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots;
+    const addCount = selectedCharmsToAdd.size;
 
     selectedCharmsToAdd.forEach(charmName => {
-        // 尝试找到空槽位
-        let emptySlotIndex = slots.findIndex(slot => !slot.EquippedTool);
-
-        if (emptySlotIndex === -1) {
-            // 如果没有空槽位，直接添加新槽位（即使槽位不够也可以添加）
-            slots.push({
-                EquippedTool: charmName,
-                IsUnlocked: true
-            });
-        } else {
-            // 如果有空槽位，使用空槽位
-            slots[emptySlotIndex] = {
-                EquippedTool: charmName,
-                IsUnlocked: true
-            };
-        }
+        slots.push({
+            EquippedTool: charmName,
+            IsUnlocked: true
+        });
     });
 
-    // 清空选择
     selectedCharmsToAdd.clear();
-
-    // 刷新显示
     displayEquippedCharms();
     displayAvailableCharms();
-
-    showSuccess(`成功添加 ${selectedCharmsToAdd.size} 个护符`);
+    showSuccess(`成功向 ${saveData.playerData.ToolEquips.savedData[currentCrestIndex].Name} 添加了 ${addCount} 个护符`);
 });
 
 function toggleCharmSlot(index, unlocked) {
-    saveData.playerData.ToolEquips.savedData[0].Data.Slots[index].IsUnlocked = unlocked;
+    saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots[index].IsUnlocked = unlocked;
 }
 
 function unequipCharm(index) {
-    const slots = saveData.playerData.ToolEquips.savedData[0].Data.Slots;
-
-    // 如果是额外添加的槽位（超出7个），直接删除
-    if (index >= 7) {
-        slots.splice(index, 1);
-    } else {
-        // 如果是原有的7个槽位，只清空装备
-        delete slots[index].EquippedTool;
-        slots[index].IsUnlocked = false;
-    }
-
+    const slots = saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots;
+    slots.splice(index, 1);
     displayEquippedCharms();
     displayAvailableCharms();
 }
@@ -200,7 +220,6 @@ function updateSeen(index, seen) {
 
 document.getElementById('downloadBtn').addEventListener('click', async () => {
     try {
-        // 在序列化前确保格式正确（逗号在左花括号后面）
         const encryptedData = await encryptSave(saveData);
 
         const blob = new Blob([encryptedData], { type: 'application/octet-stream' });
