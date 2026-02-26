@@ -243,3 +243,70 @@ h2 {
     display: flex;
     align-items: center;
 }
+
+/* 战斗风格选择器 */
+.crest-selector {
+    margin-top: 10px;
+}
+
+.crest-tabs {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 15px;
+}
+
+.crest-tab {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffcccc;
+    border: 2px solid #666;
+    padding: 10px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: all 0.3s;
+}
+
+.crest-tab:hover {
+    background: rgba(255, 51, 51, 0.2);
+    border-color: #ff6666;
+}
+
+.crest-tab.active {
+    background: rgba(255, 51, 51, 0.4);
+    border-color: #ff3333;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(255, 51, 51, 0.5);
+}
+
+.crest-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 5px;
+    font-size: 14px;
+    color: #ffcccc;
+}
+
+.crest-info strong {
+    color: #ff6666;
+}
+
+.crest-status {
+    font-size: 13px;
+}
+
+.crest-label {
+    font-size: 0.6em;
+    color: #ff9999;
+    font-weight: normal;
+}
+
+.slot-index {
+    font-size: 12px;
+    color: #999;
+    margin-right: 10px;
+}
