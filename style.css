@@ -83,6 +83,15 @@ h2 {
     font-size: 14px;
 }
 
+.btn-secondary {
+    background: #666;
+}
+
+.btn-secondary:hover {
+    background: #888;
+    box-shadow: 0 4px 8px rgba(136, 136, 136, 0.4);
+}
+
 .btn-primary {
     background: #ff6666;
     font-size: 18px;
@@ -190,6 +199,9 @@ h2 {
     text-align: center;
     padding-top: 10px;
     border-top: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    justify-content: center;
+    gap: 10px;
 }
 
 .download-section {
@@ -309,4 +321,46 @@ h2 {
     font-size: 12px;
     color: #999;
     margin-right: 10px;
+}
+
+/* 物品 / 收集品 */
+.collectable-item {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    margin-bottom: 10px;
+    border-radius: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-left: 4px solid #ffaa33;
+}
+
+.collectable-name {
+    font-weight: bold;
+    color: #ffcc66;
+    flex: 1;
+}
+
+.collectable-controls {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    font-size: 14px;
+    color: #ffcccc;
+}
+
+.collectable-controls input[type="number"] {
+    width: 70px;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #ffaa33;
+    border-radius: 3px;
+    color: #fff;
+    text-align: center;
+}
+
+.collectable-controls label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
