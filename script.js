@@ -1,7 +1,8 @@
 let saveData = null;
 let fileName = 'user1.dat';
 let selectedCharmsToAdd = new Set();
-let currentCrestIndex = 0; // 当前选中的战斗风格索引
+let currentCrestIndex = 0;
+let allCharmsSelected = false;
 
 document.getElementById('fileInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -26,7 +27,6 @@ document.getElementById('parseBtn').addEventListener('click', async () => {
         saveData = await decryptSave(fileData);
         console.log('解析后的存档数据:', JSON.parse(JSON.stringify(saveData)));
 
-        // 默认选中当前激活的战斗风格
         const currentCrestID = saveData.playerData.CurrentCrestID;
         const crestList = saveData.playerData.ToolEquips.savedData;
         currentCrestIndex = crestList.findIndex(c => c.Name === currentCrestID);
@@ -44,6 +44,7 @@ function displayContent() {
     displayCrestTabs();
     displayEquippedCharms();
     displayAvailableCharms();
+    displayCollectables();
     displayJournal();
 }
 
@@ -64,6 +65,7 @@ function displayCrestTabs() {
         tab.addEventListener('click', () => {
             currentCrestIndex = index;
             selectedCharmsToAdd.clear();
+            allCharmsSelected = false;
             displayCrestTabs();
             displayEquippedCharms();
             displayAvailableCharms();
@@ -108,20 +110,25 @@ function displayEquippedCharms() {
     }
 }
 
-function displayAvailableCharms() {
-    const availableList = document.getElementById('availableCharmsList');
-    availableList.innerHTML = '';
-
+function getAvailableCharms() {
     const allTools = saveData.playerData.Tools.savedData;
-
-    // 获取当前风格已装备的护符名称
     const equippedCharms = saveData.playerData.ToolEquips.savedData[currentCrestIndex].Data.Slots
         .filter(slot => slot.EquippedTool && slot.EquippedTool !== '')
         .map(slot => slot.EquippedTool);
 
-    const availableCharms = allTools.filter(tool =>
+    return allTools.filter(tool =>
         tool.Data.IsUnlocked && !equippedCharms.includes(tool.Name)
     );
+}
+
+function displayAvailableCharms() {
+    const availableList = document.getElementById('availableCharmsList');
+    availableList.innerHTML = '';
+
+    const availableCharms = getAvailableCharms();
+
+    // 更新全选按钮状态
+    updateSelectAllButton(availableCharms);
 
     if (availableCharms.length === 0) {
         availableList.innerHTML = '<p style="color: #ffcccc; text-align: center;">没有可用的未装备护符</p>';
@@ -131,14 +138,25 @@ function displayAvailableCharms() {
     availableCharms.forEach(tool => {
         const charmDiv = document.createElement('div');
         charmDiv.className = 'available-charm-item';
-        const safeId = CSS.escape(tool.Name);
+        const isSelected = selectedCharmsToAdd.has(tool.Name);
         charmDiv.innerHTML = `
-            <input type="checkbox" id="charm_${safeId}"
+            <input type="checkbox" ${isSelected ? 'checked' : ''}
                    onchange="toggleCharmSelection('${tool.Name.replace(/'/g, "\\'")}', this.checked)">
-            <label for="charm_${safeId}" class="charm-name">${tool.Name}</label>
+            <label class="charm-name">${tool.Name}</label>
         `;
         availableList.appendChild(charmDiv);
     });
+}
+
+function updateSelectAllButton(availableCharms) {
+    const btn = document.getElementById('selectAllCharmsBtn');
+    if (availableCharms.length === 0) {
+        btn.style.display = 'none';
+        return;
+    }
+    btn.style.display = '';
+    allCharmsSelected = availableCharms.length > 0 && availableCharms.every(t => selectedCharmsToAdd.has(t.Name));
+    btn.textContent = allCharmsSelected ? '取消全选' : '全选';
 }
 
 function toggleCharmSelection(charmName, selected) {
@@ -147,7 +165,21 @@ function toggleCharmSelection(charmName, selected) {
     } else {
         selectedCharmsToAdd.delete(charmName);
     }
+    const availableCharms = getAvailableCharms();
+    updateSelectAllButton(availableCharms);
 }
+
+document.getElementById('selectAllCharmsBtn').addEventListener('click', () => {
+    const availableCharms = getAvailableCharms();
+
+    if (allCharmsSelected) {
+        availableCharms.forEach(tool => selectedCharmsToAdd.delete(tool.Name));
+    } else {
+        availableCharms.forEach(tool => selectedCharmsToAdd.add(tool.Name));
+    }
+
+    displayAvailableCharms();
+});
 
 document.getElementById('addSelectedCharmsBtn').addEventListener('click', () => {
     if (selectedCharmsToAdd.size === 0) {
@@ -166,6 +198,7 @@ document.getElementById('addSelectedCharmsBtn').addEventListener('click', () => 
     });
 
     selectedCharmsToAdd.clear();
+    allCharmsSelected = false;
     displayEquippedCharms();
     displayAvailableCharms();
     showSuccess(`成功向 ${saveData.playerData.ToolEquips.savedData[currentCrestIndex].Name} 添加了 ${addCount} 个护符`);
@@ -182,6 +215,41 @@ function unequipCharm(index) {
     displayAvailableCharms();
 }
 
+// 物品 / 收集品
+function displayCollectables() {
+    const list = document.getElementById('collectablesList');
+    list.innerHTML = '';
+
+    const collectables = saveData.playerData.Collectables.savedData;
+
+    collectables.forEach((item, index) => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'collectable-item';
+        itemDiv.innerHTML = `
+            <div class="collectable-name">${item.Name}</div>
+            <div class="collectable-controls">
+                <label>
+                    数量:
+                    <input type="number" min="0" value="${item.Data.Amount}"
+                           onchange="updateCollectableAmount(${index}, this.value)">
+                </label>
+            </div>
+        `;
+        list.appendChild(itemDiv);
+    });
+
+    if (collectables.length === 0) {
+        list.innerHTML = '<p style="color: #ffcccc; text-align: center;">暂无物品数据</p>';
+    }
+}
+
+function updateCollectableAmount(index, value) {
+    const amount = parseInt(value);
+    if (isNaN(amount) || amount < 0) return;
+    saveData.playerData.Collectables.savedData[index].Data.Amount = amount;
+}
+
+// 猎人日志
 function displayJournal() {
     const journalList = document.getElementById('journalList');
     journalList.innerHTML = '';
@@ -218,6 +286,7 @@ function updateSeen(index, seen) {
     saveData.playerData.EnemyJournalKillData.list[index].Record.HasBeenSeen = seen;
 }
 
+// 下载
 document.getElementById('downloadBtn').addEventListener('click', async () => {
     try {
         const encryptedData = await encryptSave(saveData);
@@ -236,6 +305,7 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
     }
 });
 
+// 提示
 function showError(message) {
     const errorDiv = document.getElementById('error');
     errorDiv.textContent = '❌ ' + message;
